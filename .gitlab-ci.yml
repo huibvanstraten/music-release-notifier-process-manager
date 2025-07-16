@@ -1,0 +1,71 @@
+image: google/cloud-sdk:slim
+
+services:
+  - name: docker:24.0.5-dind
+    alias: docker
+
+variables:
+  # Docker-in-Docker config
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+
+  # Builds
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+  # Container naming
+  IMAGE_NAME: "music-release-notifier-process-manager"
+  IMAGE_TAG: "v$CI_PIPELINE_ID"
+
+stages:
+  - build
+  - test
+  - publish
+
+#gradle build
+build:
+  stage: build
+  image: gradle:jdk21
+  before_script:
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+  script:
+    - ./gradlew --build-cache assemble
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    policy: push
+    paths:
+      - build
+      - .gradle
+
+# Unit tests
+test:
+  stage: test
+  image: gradle:jdk21
+  before_script:
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+  script:
+    - ./gradlew check
+  artifacts:
+    when: always
+    reports:
+      junit: build/test-results/test/**/TEST-*.xml
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    policy: pull
+    paths:
+      - build
+      - .gradle
+
+# build and publish
+build_and_publish:
+  stage: publish
+  before_script:
+    # — Docker Hub login
+    - echo "$DOCKER_HUB_PW" | docker login -u "$DOCKER_HUB_USER" --password-stdin
+
+  script:
+    # 1) build once (add any --build-arg you need)
+    - docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
+
+    # 2) tag and push Docker
+    - docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKER_HUB_USER/$IMAGE_NAME:$IMAGE_TAG
+    - docker push $DOCKER_HUB_USER/$IMAGE_NAME:$IMAGE_TAG
